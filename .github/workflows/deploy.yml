@@ -37,6 +37,9 @@ jobs:
           python -m pytest -q
 
   deploy:
+    defaults:
+      run:
+        shell: bash
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
