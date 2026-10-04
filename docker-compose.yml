@@ -1,0 +1,20 @@
+name: ops-health
+
+services:
+  web:
+    build: .
+    image: ops-health-dashboard
+    ports:
+      - "8080:8080"
+    environment:
+      TZ: Asia/Kolkata
+      DATABASE_PATH: /data/health.db
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me}
+      SESSION_SECRET: ${SESSION_SECRET:-replace-this-session-secret}
+    volumes:
+      - health-data:/data
+    restart: unless-stopped
+
+volumes:
+  health-data:
