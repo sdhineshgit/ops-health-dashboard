@@ -42,7 +42,7 @@ jobs:
     runs-on: self-hosted
     defaults:
       run:
-        shell: '"C:\Program Files\Git\bin\bash.exe" --noprofile --norc -eo pipefail {0}'
+        shell: powershell
     steps:
       - uses: actions/checkout@v4
 
@@ -53,14 +53,15 @@ jobs:
           KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
         run: |
-          missing=0
-          for name in ADMIN_PASSWORD SESSION_SECRET KUBE_CONFIG GHCR_PULL_TOKEN; do
-            if [ -z "${!name}" ]; then
-              echo "Missing GitHub secret: $name"
-              missing=1
-            fi
-          done
-          test "$missing" -eq 0
+          $missing = $false
+          foreach ($name in @("ADMIN_PASSWORD", "SESSION_SECRET", "KUBE_CONFIG", "GHCR_PULL_TOKEN")) {
+            $value = (Get-Item -Path "Env:$name" -ErrorAction SilentlyContinue).Value
+            if ([string]::IsNullOrWhiteSpace($value)) {
+              Write-Host "Missing GitHub secret: $name"
+              $missing = $true
+            }
+          }
+          if ($missing) { exit 1 }
 
       - uses: docker/login-action@v3
         with:
@@ -78,16 +79,26 @@ jobs:
 
       - name: Point the Deployment at this image
         run: |
-          sed -i "s|ops-health-dashboard:local|${IMAGE}:${GITHUB_SHA}|" deploy/k3s/deployment.yaml
-          if [ -n "${{ vars.HEALTH_HOST }}" ]; then
-            sed -i "s|health.internal|${{ vars.HEALTH_HOST }}|" deploy/k3s/ingress.yaml
-          fi
+          $utf8 = New-Object System.Text.UTF8Encoding $false
+          $deploymentPath = Join-Path (Get-Location) "deploy/k3s/deployment.yaml"
+          $deployment = [IO.File]::ReadAllText($deploymentPath)
+          $image = "$($env:IMAGE):$($env:GITHUB_SHA)"
+          $deployment = $deployment.Replace("ops-health-dashboard:local", $image)
+          [IO.File]::WriteAllText($deploymentPath, $deployment, $utf8)
+          $healthHost = "${{ vars.HEALTH_HOST }}"
+          if (-not [string]::IsNullOrWhiteSpace($healthHost)) {
+            $ingressPath = Join-Path (Get-Location) "deploy/k3s/ingress.yaml"
+            $ingress = [IO.File]::ReadAllText($ingressPath)
+            $ingress = $ingress.Replace("health.internal", $healthHost)
+            [IO.File]::WriteAllText($ingressPath, $ingress, $utf8)
+          }
 
       - name: Configure kubectl
         run: |
-          mkdir -p "$HOME/.kube"
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > "$HOME/.kube/config"
-          chmod 600 "$HOME/.kube/config"
+          $kubeDir = Join-Path $env:USERPROFILE ".kube"
+          New-Item -ItemType Directory -Force -Path $kubeDir | Out-Null
+          $encoded = ($env:KUBE_CONFIG -replace "\s", "")
+          [IO.File]::WriteAllBytes((Join-Path $kubeDir "config"), [Convert]::FromBase64String($encoded))
 
       - name: Apply to k3s
         env:
@@ -96,16 +107,15 @@ jobs:
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
         run: |
+          $adminUser = $env:ADMIN_USERNAME
+          if ([string]::IsNullOrWhiteSpace($adminUser)) { $adminUser = "admin" }
           kubectl apply -f deploy/k3s/namespace.yaml
-          kubectl -n ops-health create secret docker-registry ghcr-pull \
-            --docker-server=ghcr.io \
-            --docker-username="${{ github.actor }}" \
-            --docker-password="$GHCR_PULL_TOKEN" \
-            --dry-run=client -o yaml | kubectl apply -f -
-          kubectl -n ops-health create secret generic ops-health-config \
-            --from-literal=ADMIN_USERNAME="${ADMIN_USERNAME:-admin}" \
-            --from-literal=ADMIN_PASSWORD="$ADMIN_PASSWORD" \
-            --from-literal=SESSION_SECRET="$SESSION_SECRET" \
-            --dry-run=client -o yaml | kubectl apply -f -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          kubectl -n ops-health create secret docker-registry ghcr-pull --docker-server=ghcr.io --docker-username="${{ github.actor }}" --docker-password="$env:GHCR_PULL_TOKEN" --dry-run=client -o yaml | kubectl apply -f -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          kubectl -n ops-health create secret generic ops-health-config --from-literal=ADMIN_USERNAME="$adminUser" --from-literal=ADMIN_PASSWORD="$env:ADMIN_PASSWORD" --from-literal=SESSION_SECRET="$env:SESSION_SECRET" --dry-run=client -o yaml | kubectl apply -f -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           kubectl apply -k deploy/k3s
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           kubectl -n ops-health rollout status deployment/ops-health --timeout=180s
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
