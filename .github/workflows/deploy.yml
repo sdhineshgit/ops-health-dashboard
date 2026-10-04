@@ -37,15 +37,12 @@ jobs:
           python -m pytest -q
 
   deploy:
-    defaults:
-      run:
-        shell: bash
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: self-hosted
     defaults:
       run:
-        shell: bash
+        shell: '"C:\Program Files\Git\bin\bash.exe" --noprofile --norc -eo pipefail {0}'
     steps:
       - uses: actions/checkout@v4
 
