@@ -6,3 +6,5 @@ venv/
 data/
 *.db
 *.db-*
+actions-runner/
+k3s.yaml
