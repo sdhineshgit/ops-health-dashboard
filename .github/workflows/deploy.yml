@@ -94,11 +94,26 @@ jobs:
           }
 
       - name: Configure kubectl
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
         run: |
-          $kubeDir = Join-Path $env:USERPROFILE ".kube"
-          New-Item -ItemType Directory -Force -Path $kubeDir | Out-Null
           $encoded = ($env:KUBE_CONFIG -replace "\s", "")
-          [IO.File]::WriteAllBytes((Join-Path $kubeDir "config"), [Convert]::FromBase64String($encoded))
+          if ([string]::IsNullOrWhiteSpace($encoded)) {
+            Write-Host "KUBE_CONFIG secret is empty."
+            exit 1
+          }
+          $bytes = [Convert]::FromBase64String($encoded)
+          if ($bytes.Length -lt 50) {
+            Write-Host "KUBE_CONFIG secret did not contain a kubeconfig. Create it again from this PC."
+            exit 1
+          }
+          $text = [Text.Encoding]::UTF8.GetString($bytes).Replace("host.docker.internal", "127.0.0.1")
+          $kubeFile = Join-Path $env:RUNNER_TEMP "kubeconfig"
+          $utf8 = New-Object System.Text.UTF8Encoding $false
+          [IO.File]::WriteAllText($kubeFile, $text, $utf8)
+          Add-Content -Path $env:GITHUB_ENV -Value "KUBECONFIG=$kubeFile"
+          kubectl --kubeconfig $kubeFile config view -o jsonpath="{.clusters[0].cluster.server}"
+          Write-Host ""
 
       - name: Apply to k3s
         env:
